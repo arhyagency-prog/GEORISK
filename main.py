@@ -1,18 +1,17 @@
 """
-GeoPulse Risk API — Backend
+GeoPulse Risk API — Backend (Groq Edition - Free)
 """
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
-import anthropic
 import asyncio
 import hashlib
 import json
 import os
 import time
+import httpx
 
 app = FastAPI(
     title="GeoPulse Risk API",
@@ -27,35 +26,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))
-
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 cache: dict = {}
 
 PROMPT = """You are a geopolitical risk intelligence engine.
 Analyze the current geopolitical risk for: {country}
 
-Respond ONLY with a raw JSON object, no markdown, no backticks:
-{{
-  "country": "{country}",
-  "overall_score": <integer 0-100>,
-  "risk_level": "LOW|MODERATE|ELEVATED|HIGH|CRITICAL",
-  "dimensions": {{
-    "armed_conflict": <0-100>,
-    "political_instability": <0-100>,
-    "economic_collapse": <0-100>,
-    "sanctions_exposure": <0-100>,
-    "terrorism": <0-100>,
-    "cyber_threat": <0-100>
-  }},
-  "key_triggers": ["<trigger 1>", "<trigger 2>", "<trigger 3>"],
-  "trend": "DETERIORATING|STABLE|IMPROVING",
-  "investment_impact": "<one sentence>",
-  "outlook_30_days": "<one sentence>",
-  "confidence": <0-100>,
-  "timestamp": "{timestamp}"
-}}"""
+Respond ONLY with a raw JSON object, absolutely no markdown, no backticks, no explanation:
+{{"country":"{country}","overall_score":<integer 0-100>,"risk_level":"LOW|MODERATE|ELEVATED|HIGH|CRITICAL","dimensions":{{"armed_conflict":<0-100>,"political_instability":<0-100>,"economic_collapse":<0-100>,"sanctions_exposure":<0-100>,"terrorism":<0-100>,"cyber_threat":<0-100>}},"key_triggers":["<trigger 1>","<trigger 2>","<trigger 3>"],"trend":"DETERIORATING|STABLE|IMPROVING","investment_impact":"<one sentence>","outlook_30_days":"<one sentence>","confidence":<0-100>}}"""
 
 async def score_country(country: str) -> dict:
     cache_key = hashlib.md5(
@@ -67,19 +46,33 @@ async def score_country(country: str) -> dict:
         if time.time() - cached["_cached_at"] < CACHE_TTL:
             return {**cached["data"], "cached": True}
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1000,
-        messages=[{
-            "role": "user",
-            "content": PROMPT.format(
-                country=country,
-                timestamp=datetime.utcnow().isoformat()
-            )
-        }]
-    )
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a geopolitical risk analyst. Always respond with valid raw JSON only, no markdown."
+                    },
+                    {
+                        "role": "user",
+                        "content": PROMPT.format(country=country)
+                    }
+                ],
+                "temperature": 0.3,
+                "max_tokens": 800,
+            }
+        )
+        response.raise_for_status()
+        result = response.json()
 
-    raw = message.content[0].text.strip()
+    raw = result["choices"][0]["message"]["content"].strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
     data = json.loads(raw)
 
@@ -96,6 +89,7 @@ def root():
     return {
         "api": "GeoPulse Risk API",
         "version": "1.0.0",
+        "engine": "Groq / Llama 3.3 70B",
         "docs": "/docs",
         "endpoints": [
             "GET  /risk/{country}",
