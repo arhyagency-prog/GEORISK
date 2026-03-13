@@ -3,6 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
+    httpx==0.27.2 \
     fastapi==0.115.0 \
     "uvicorn[standard]==0.30.0" \
     anthropic==0.34.0 \
